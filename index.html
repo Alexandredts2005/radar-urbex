@@ -119,6 +119,8 @@ a{color:var(--accent)}
 .sub{color:var(--muted);font-size:13.5px;margin:0 0 12px}
 .acts{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px}
 .btn{background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:10px 8px;font-weight:500;font-size:14px;text-align:center;text-decoration:none;color:var(--fg);display:block}
+.duo{grid-column:1/-1;display:flex;gap:8px}
+.duo .btn{flex:1;border-color:var(--accent);color:var(--accent);font-weight:600}
 .btn.pri{grid-column:1/-1;background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
 .btn[aria-pressed="true"]{border-color:var(--warn);color:var(--warn)}
 .routebox{background:var(--panel2);border-left:3px solid var(--accent);padding:10px 12px;margin:0 0 12px;font-size:14px}
@@ -788,6 +790,8 @@ function openDetail(p) {
     '<p class="sub">' + (p.name ? esc(p.type) + ' · ' : '') + 'à ' + fmtDist(p.dist) + ' à vol d’oiseau</p>' +
     (t.access === 'private' || t.access === 'no' || t.access === 'military' ? '<p class="alert">Accès ' + esc(access.toLowerCase()) + ' d’après OpenStreetMap. Demande l’autorisation du propriétaire avant d’entrer.</p>' : '') +
     '<div class="acts"><button type="button" class="btn pri" id="goBtn">Itinéraire jusqu’ici</button>' +
+    '<div class="duo"><a class="btn" href="https://www.google.com/maps/search/?api=1&amp;query=' + dest + '" target="_blank" rel="noopener">Ouvrir dans Maps</a>' +
+    (/iPhone|iPad|iPod|Macintosh/.test(navigator.userAgent) ? '<a class="btn" href="https://maps.apple.com/?ll=' + dest + '&amp;q=' + encodeURIComponent(title(p)) + '" target="_blank" rel="noopener">Ouvrir dans Plans</a>' : '') + '</div>' +
     '<button type="button" class="btn" id="favBtn" aria-pressed="' + state.favs.has(p.id) + '">★ Favori</button>' +
     '<button type="button" class="btn" id="seenBtn" aria-pressed="' + state.seen.has(p.id) + '">✓ Visité</button>' +
     '<button type="button" class="btn" id="copyBtn">Copier GPS</button></div>' +

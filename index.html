@@ -35,6 +35,7 @@ a{color:var(--accent)}
 .leaflet-control-attribution{background:rgba(20,23,26,.78)!important;color:var(--muted)!important;font-size:10px}
 .leaflet-control-attribution a{color:var(--muted)!important}
 .leaflet-bottom{bottom:calc(var(--peek) + var(--sb))}
+.dark-tiles{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.88) saturate(.55)}
 
 /* Barre du haut */
 .top{position:fixed;z-index:1100;top:0;left:0;right:0;padding:calc(8px + var(--st)) 12px 0;display:flex;flex-direction:column;gap:8px;pointer-events:none}
@@ -432,8 +433,9 @@ var DEFAULT_ORIGIN = { lat: 47.2184, lon: -1.5536, label: 'Nantes' };
 var OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter', 'https://overpass.private.coffee/api/interpreter'];
 var IGN = function (layer, fmt) { return 'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=' + layer + '&STYLE=normal&FORMAT=' + fmt + '&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}'; };
 var LAYERS = {
-  sombre: { label: 'Sombre', url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', opt: { subdomains: 'abcd', maxZoom: 20, attribution: '&copy; OpenStreetMap, &copy; CARTO' } },
-  plan: { label: 'Plan', url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', opt: { subdomains: 'abcd', maxZoom: 20, attribution: '&copy; OpenStreetMap, &copy; CARTO' } },
+  sombre: { label: 'Sombre', url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', opt: { maxZoom: 19, className: 'dark-tiles', attribution: '&copy; contributeurs OpenStreetMap' } },
+  plan: { label: 'Plan', url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', opt: { maxZoom: 19, attribution: '&copy; contributeurs OpenStreetMap' } },
+  relief: { label: 'Relief', url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', opt: { subdomains: 'abc', maxNativeZoom: 17, maxZoom: 19, attribution: '&copy; OpenStreetMap, SRTM, &copy; OpenTopoMap' } },
   sat: { label: 'Satellite', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', opt: { maxZoom: 19, attribution: 'Imagerie &copy; Esri, Maxar, Earthstar Geographics' } },
   ign: { label: 'Photo aérienne IGN (France)', url: IGN('ORTHOIMAGERY.ORTHOPHOTOS', 'image/jpeg'), opt: { maxZoom: 19, attribution: '&copy; IGN' } },
   old: { label: 'Vue aérienne 1950-1965 (France)', url: IGN('ORTHOIMAGERY.ORTHOPHOTOS.1950-1965', 'image/png'), opt: { maxZoom: 18, attribution: '&copy; IGN' } }
@@ -485,7 +487,7 @@ function initMap() {
     search(state.origin, true);
   });
   map.on('moveend', function () {
-    if (!state.center) return;
+    if (!state.center || state.busy) return;
     var c = map.getCenter();
     $('#areaBtn').hidden = !(map.getZoom() >= 8 && haversine(c.lat, c.lng, state.center.lat, state.center.lon) > state.radius * 0.6);
   });
@@ -536,13 +538,14 @@ function overpass(q) {
 function search(center, fit) {
   var my = ++searchSeq;
   state.center = { lat: center.lat, lon: center.lon, label: center.label || 'la zone affichée' };
-  $('#areaBtn').hidden = true;
+  $('#areaBtn').hidden = true; state.busy = true;
   setStatus('Recherche des lieux abandonnés…', true);
   if (radiusCircle) map.removeLayer(radiusCircle);
   radiusCircle = L.circle([center.lat, center.lon], { radius: state.radius * 1000, color: ACCENT, weight: 1, dashArray: '4 7', fill: false, interactive: false }).addTo(map);
   if (fit) map.fitBounds(radiusCircle.getBounds(), { paddingTopLeft: pad().tl, paddingBottomRight: pad().br });
   return overpass(buildQuery(center.lat, center.lon, state.radius)).then(function (j) {
     if (my !== searchSeq) return;
+    state.busy = false;
     var els = j.elements || [];
     state.places = normalize(els, state.center, state.radius);
     state.byId = {};
@@ -559,6 +562,7 @@ function search(center, fit) {
     if (!isWide() && $('#sheet').dataset.state === 'peek' && !state.current) setSheet('half');
   }).catch(function () {
     if (my !== searchSeq) return;
+    state.busy = false;
     setStatus('Recherche impossible');
     toast('Les serveurs OpenStreetMap ne répondent pas. Vérifie ta connexion, réduis le rayon ou réessaie dans une minute.', 8000);
   });

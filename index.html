@@ -384,21 +384,20 @@ function bboxOf(lat, lon, km) {
   var dLat = km / 111.32, dLon = km / (111.32 * Math.max(0.15, Math.cos(lat * Math.PI / 180)));
   return [lat - dLat, lon - dLon, lat + dLat, lon + dLon].map(function (n) { return n.toFixed(5); });
 }
-var MAX_RESULTS = 2500;
-function buildQuery(lat, lon, km) {
-  var b = bboxOf(lat, lon, km).join(',');
-  var f = [
-    '["abandoned"="yes"]', '["ruins"="yes"]', '["historic"="ruins"]', '["building"="ruins"]',
-    '["abandoned:building"]', '["abandoned:amenity"]', '["abandoned:man_made"]', '["abandoned:tourism"]',
-    '["abandoned:leisure"]', '["abandoned:military"]', '["abandoned:landuse"~"industrial|military|railway|quarry"]',
-    '["abandoned:railway"~"station|halt"]', '["disused:railway"~"station|halt"]', '["railway"~"station|halt"]["disused"="yes"]',
-    '["disused:building"]', '["building"]["disused"="yes"]',
-    '["disused:amenity"~"hospital|school|place_of_worship|cinema|theatre|prison|college|university|nightclub|clinic|monastery"]',
-    '["disused:man_made"]', '["disused:military"]', '["disused:tourism"~"hotel|theme_park|motel|hostel|camp_site|zoo"]',
-    '["disused:leisure"~"swimming_pool|stadium|water_park|sports_centre"]',
-    '["military"="bunker"]', '["historic"~"^(mine|mine_shaft)$"]'
-  ];
-  return '[out:json][timeout:60][bbox:' + b + '];(' + f.map(function (x) { return 'nwr' + x + ';'; }).join('') + ');out tags center ' + MAX_RESULTS + ';';
+var MAX_RESULTS = 1500;
+var QUERY_PARTS = {
+  a: ['nwr["abandoned"="yes"]', 'nwr["historic"="ruins"]', 'nwr["ruins"="yes"]', 'nw["building"="ruins"]',
+    'nw["abandoned:building"]', 'nw["disused:building"]', 'nw["building"]["disused"="yes"]', 'nw["military"="bunker"]'],
+  b: ['nw["abandoned:amenity"]', 'nw["abandoned:man_made"]', 'nw["abandoned:tourism"]', 'nw["abandoned:leisure"]', 'nw["abandoned:military"]',
+    'nw["abandoned:landuse"~"industrial|military|railway|quarry"]', 'nw["abandoned:railway"~"station|halt"]', 'nw["disused:railway"~"station|halt"]',
+    'nw["railway"~"station|halt"]["disused"="yes"]',
+    'nw["disused:amenity"~"hospital|school|place_of_worship|cinema|theatre|prison|college|university|nightclub|clinic|monastery"]',
+    'nw["disused:man_made"]', 'nw["disused:military"]', 'nw["disused:tourism"~"hotel|theme_park|motel|hostel|camp_site|zoo"]',
+    'nw["disused:leisure"~"swimming_pool|stadium|water_park|sports_centre"]', 'nw["historic"~"^(mine|mine_shaft)$"]']
+};
+function buildQuery(lat, lon, km, part) {
+  var f = part ? QUERY_PARTS[part] : QUERY_PARTS.a.concat(QUERY_PARTS.b);
+  return '[out:json][timeout:25][bbox:' + bboxOf(lat, lon, km).join(',') + '];(' + f.join(';') + ';);out tags center ' + MAX_RESULTS + ';';
 }
 function normalize(elements, center, km) {
   var seen = {}, out = [];
@@ -430,7 +429,7 @@ var store = {
 };
 var ACCENT = '#63c2ad';
 var DEFAULT_ORIGIN = { lat: 47.2184, lon: -1.5536, label: 'Nantes' };
-var OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter', 'https://overpass.private.coffee/api/interpreter'];
+var OVERPASS = ['https://overpass.private.coffee/api/interpreter', 'https://overpass-api.de/api/interpreter', 'https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
 var IGN = function (layer, fmt) { return 'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=' + layer + '&STYLE=normal&FORMAT=' + fmt + '&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}'; };
 var LAYERS = {
   sombre: { label: 'Sombre', url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', opt: { maxZoom: 19, className: 'dark-tiles', attribution: '&copy; contributeurs OpenStreetMap' } },
@@ -527,44 +526,56 @@ function focusPlace(p) {
 
 /* ---------- recherche des lieux ---------- */
 function overpass(q) {
-  var i = 0;
-  var attempt = function () {
-    return getJSON(OVERPASS[i], 75000, { method: 'POST', body: 'data=' + encodeURIComponent(q), headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' } })
-      .then(function (j) { if (j.remark && !(j.elements || []).length) throw new Error(j.remark); return j; })
-      .catch(function (e) { i++; if (i < OVERPASS.length) return attempt(); throw e; });
+  var opt = { method: 'POST', body: 'data=' + encodeURIComponent(q), headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' } };
+  var one = function (url) {
+    return getJSON(url, 35000, opt).then(function (j) { if (j.remark && !(j.elements || []).length) throw new Error(j.remark); return j; });
   };
-  return attempt();
+  if (Promise.any) return Promise.any(OVERPASS.map(one));
+  var i = 0, next = function () { return one(OVERPASS[i]).catch(function (e) { i++; if (i < OVERPASS.length) return next(); throw e; }); };
+  return next();
 }
-function search(center, fit) {
+function setPlaces(raw) {
+  state.places = normalize(raw, state.center, state.radius);
+  state.byId = {};
+  state.places.forEach(function (p) {
+    p.dist = haversine(state.origin.lat, state.origin.lon, p.lat, p.lon);
+    p.marker = L.marker([p.lat, p.lon], { icon: makeIcon(p), title: title(p) });
+    p.marker.on('click', function () { openDetail(p); });
+    state.byId[p.id] = p;
+  });
+  state.shown = 120;
+  renderAll();
+  if (!isWide() && $('#sheet').dataset.state === 'peek' && !state.current) setSheet('half');
+}
+function search(center, fit, fresh) {
   var my = ++searchSeq;
   state.center = { lat: center.lat, lon: center.lon, label: center.label || 'la zone affichée' };
   $('#areaBtn').hidden = true; state.busy = true;
-  setStatus('Recherche des lieux abandonnés…', true);
+  setStatus('Recherche des lieux abandonnés… 10 à 30 s', true);
   if (radiusCircle) map.removeLayer(radiusCircle);
   radiusCircle = L.circle([center.lat, center.lon], { radius: state.radius * 1000, color: ACCENT, weight: 1, dashArray: '4 7', fill: false, interactive: false }).addTo(map);
   if (fit) map.fitBounds(radiusCircle.getBounds(), { paddingTopLeft: pad().tl, paddingBottomRight: pad().br });
-  return overpass(buildQuery(center.lat, center.lon, state.radius)).then(function (j) {
-    if (my !== searchSeq) return;
-    state.busy = false;
-    var els = j.elements || [];
-    state.places = normalize(els, state.center, state.radius);
-    state.byId = {};
-    state.places.forEach(function (p) {
-      p.dist = haversine(state.origin.lat, state.origin.lon, p.lat, p.lon);
-      p.marker = L.marker([p.lat, p.lon], { icon: makeIcon(p), title: title(p) });
-      p.marker.on('click', function () { openDetail(p); });
-      state.byId[p.id] = p;
+  var key = center.lat.toFixed(2) + ',' + center.lon.toFixed(2) + ',' + state.radius, cached = store.get('cache', null);
+  if (!fresh && cached && cached.k === key && Date.now() - cached.t < 864e5 && cached.els && cached.els.length) {
+    state.busy = false; setPlaces(cached.els); return;
+  }
+  var raw = [], pending = 2, ok = 0;
+  ['a', 'b'].forEach(function (part) {
+    overpass(buildQuery(center.lat, center.lon, state.radius, part)).then(function (j) {
+      if (my !== searchSeq) return; ok++; raw = raw.concat(j.elements || []);
+    }).catch(function () {}).then(function () {
+      if (my !== searchSeq) return;
+      pending--; state.busy = pending > 0;
+      if (ok) setPlaces(raw);
+      if (pending) return;
+      if (!ok) {
+        setStatus('Recherche impossible');
+        toast('Les serveurs OpenStreetMap ne répondent pas. Vérifie ta connexion, réduis le rayon ou réessaie dans une minute.', 8000);
+        return;
+      }
+      if (ok === 2) store.set('cache', { k: key, t: Date.now(), els: raw });
+      if (!state.places.length) toast('Aucun lieu trouvé ici. Agrandis le rayon ou déplace la carte.');
     });
-    state.shown = 120;
-    renderAll();
-    if (els.length >= MAX_RESULTS) toast('Zone très dense : la liste est tronquée. Réduis le rayon pour tout voir.');
-    if (!state.places.length) toast('Aucun lieu trouvé ici. Agrandis le rayon ou déplace la carte.');
-    if (!isWide() && $('#sheet').dataset.state === 'peek' && !state.current) setSheet('half');
-  }).catch(function () {
-    if (my !== searchSeq) return;
-    state.busy = false;
-    setStatus('Recherche impossible');
-    toast('Les serveurs OpenStreetMap ne répondent pas. Vérifie ta connexion, réduis le rayon ou réessaie dans une minute.', 8000);
   });
 }
 
@@ -597,7 +608,7 @@ function renderAll() {
   var ms = arr.map(function (p) { return p.marker; });
   if (group.addLayers) group.addLayers(ms); else ms.forEach(function (m) { group.addLayer(m); });
   var n = arr.length, tot = state.places.length;
-  setStatus('<b>' + n + ' lieu' + (n > 1 ? 'x' : '') + '</b>' + (n !== tot ? ' sur ' + tot : '') + ' · ' + state.radius + ' km autour de ' + esc(state.center ? state.center.label : ''));
+  setStatus('<b>' + n + ' lieu' + (n > 1 ? 'x' : '') + '</b>' + (n !== tot ? ' sur ' + tot : '') + ' · ' + state.radius + ' km autour de ' + esc(state.center ? state.center.label : ''), state.busy);
   var html = arr.slice(0, state.shown).map(function (p) {
     var dots = p.score >= 5 ? '●●●' : p.score >= 3 ? '●●○' : '●○○';
     return '<li><button type="button" class="item' + (state.seen.has(p.id) ? ' seen' : '') + '" data-id="' + esc(p.id) + '">' + pinHTML(p, 'flat') +
@@ -807,7 +818,7 @@ function bind() {
     else { if (state.cats.has(id)) state.cats.delete(id); else state.cats.add(id); if (!state.cats.size) state.cats = new Set(all); }
     state.shown = 120; renderAll();
   });
-  $('#areaBtn').addEventListener('click', function () { var c = map.getCenter(); search({ lat: c.lat, lon: c.lng, label: 'la zone affichée' }, false); });
+  $('#areaBtn').addEventListener('click', function () { var c = map.getCenter(); search({ lat: c.lat, lon: c.lng, label: 'la zone affichée' }, false, true); });
   $('#locBtn').addEventListener('click', function () {
     if (!navigator.geolocation) return toast('Ton navigateur ne donne pas la position. Cherche ta ville ou fais un appui long sur la carte.');
     $('#locBtn').classList.add('on'); setStatus('Localisation…', true);
